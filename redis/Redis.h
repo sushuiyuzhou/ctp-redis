@@ -13,10 +13,15 @@
 
 #include <map>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
+#include <random>
 
 namespace redis {
+
+static auto DIST = std::uniform_int_distribution<int>(100, 999);
+static auto ENG = std::default_random_engine();
 
 class Redis {
   // hiredis objects
@@ -26,6 +31,7 @@ class Redis {
   using RedisContext = std::unique_ptr<redisContext, ContextDeleter>;
   using RedisReply = std::unique_ptr<redisReply, ReplyDeleter>;
 
+  std::string _id;
   RedisContext _cxt;
 
   std::string _host;
@@ -38,7 +44,8 @@ class Redis {
   Redis(std::string host = "localhost",
         int port = 6379,
         timeval timeout = {1, 500000})
-      : _logger(spdlog::stdout_color_mt("Redis")),
+      : _id(std::to_string(DIST(ENG))),
+        _logger(spdlog::stdout_color_mt("Redis Client " + _id)),
         _host(host),
         _port(port),
         _timeout(timeout),
@@ -139,10 +146,17 @@ class Redis {
     }
   }
 
+  // TODO: expand to arbitrary arguments
+  bool DEL(std::string const &key) {
+    auto query = "DEL " + key;
+    auto reply = getRedisReply(query.c_str());
+    return reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
+  }
+
   bool MSET(std::map<std::string, std::string> const &kvs) {
     auto query = std::string("MSET ");
     for (auto &e : kvs) {
-      query += e.first + " " + e.second;
+      query += e.first + " " + e.second + " ";
     }
 
     auto reply = getRedisReply(query.c_str());
@@ -158,19 +172,120 @@ class Redis {
 
   std::map<std::string, std::string> MGET(std::vector<std::string> keys) {
     auto query = std::string("MGET ");
-    for (auto & e : keys) {
-      query += e;
+    for (auto &e : keys) {
+      query += e + " ";
     }
 
     auto reply = getRedisReply(query.c_str());
 
+    std::map<std::string, std::string> res;
     if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
-
+      for (auto i = 0; i < reply->elements; i++) {
+        res[keys[i]] = reply->element[i]->str;
+      }
+    } else {
+      _logger->error("[Redis]: error in MGET");
     }
-    
+
+    return res;
+  }
+
+  // set interface
+  // TODO: extend to arbitrary arguments
+  bool SADD(std::string const &set, std::string const &value) {
+    auto query = std::string("SADD ") + set + " " + value;
+    auto reply = getRedisReply(query.c_str());
+    return reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
+  }
+
+  std::set<std::string> SMEMBERS(std::string const &set) {
+    auto query = std::string("SMEMBERS ") + set;
+    auto reply = getRedisReply(query.c_str());
+
+    std::set<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        res.insert(reply->element[i]->str);
+      }
+    } else {
+      _logger->error("[Redis]: error in SADD");
+    }
+
+    return res;
+  }
+
+  bool SISMEMBER(std::string const &set, std::string const &mem) {
+    auto query = std::string("SISMEMBER ") + set + " " + mem;
+    auto reply = getRedisReply(query.c_str());
+    return reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
+  }
+
+  std::set<std::string> SINTER(std::string const &l, std::string const &r) {
+    auto query = std::string("SINTER ") + l + " " + r;
+    auto reply = getRedisReply(query.c_str());
+
+    std::set<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        res.insert(reply->element[i]->str);
+      }
+    } else {
+      _logger->error("[Redis]: error in SINTER");
+    }
+
+    return res;
+  }
+
+  std::set<std::string> SUNION(std::string const &l, std::string const &r) {
+    auto query = std::string("SUNION ") + l + " " + r;
+    auto reply = getRedisReply(query.c_str());
+
+    std::set<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        res.insert(reply->element[i]->str);
+      }
+    } else {
+      _logger->error("[Redis]: error in SUNION");
+    }
+
+    return res;
   }
 
   // hash interface
+  bool HSET(std::string const &name, std::map<std::string, std::string> const &ctn) {
+    std::string hash;
+    for (auto &e : ctn) {
+      if (!e.second.empty()) // avoid empty content
+        hash += e.first + " " + e.second + " ";
+    }
+
+    auto query = "HSET " + name + " " + hash;
+    auto reply = getRedisReply(query.c_str());
+
+    return reply->type == REDIS_REPLY_INTEGER;
+  }
+
+  bool HEXISTS(std::string const &hash, std::string const &key) {
+    auto query = std::string("HEXISTS ") + hash + " " + key;
+    auto reply = getRedisReply(query.c_str());
+    return reply->type == REDIS_REPLY_INTEGER && reply->integer == 1;
+  }
+
+  std::string HGET(std::string const &hash, std::string const &key) {
+    auto query = std::string("HGET ") + hash + " " + key;
+    auto reply = getRedisReply(query.c_str());
+
+    if (reply->type == REDIS_REPLY_NIL) {
+      _logger->warn("[Redis]: nil for hash {}, key {}", hash, key);
+      return "";
+    } else if (reply->type == REDIS_REPLY_STRING) {
+      return reply->str;
+    } else {
+      _logger->error("[Redis]: error in HGET");
+    }
+  }
+
   bool HMSET(std::string const &name, std::map<std::string, std::string> const &cnt) {
     std::string hash;
     for (auto &e : cnt) {
@@ -190,6 +305,29 @@ class Redis {
     }
   }
 
+  std::vector<std::string> HMGET(std::string const &hash, std::vector<std::string> const &keys) {
+    auto query = std::string("HMGET ") + hash + " ";
+    for (auto &key : keys) {
+      query += key + " ";
+    }
+
+    auto reply = getRedisReply(query.c_str());
+
+    std::vector<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        if (reply->element[i]->type == REDIS_REPLY_NIL) {
+          res.emplace_back("");
+        } else {
+          res.emplace_back(reply->element[i]->str);
+        }
+      }
+    } else {
+      _logger->error("[Redis]: error in HMGET");
+    }
+    return res;
+  }
+
   std::map<std::string, std::string> HGETALL(std::string const &name) {
     auto query = "HGETALL " + name;
 
@@ -205,6 +343,7 @@ class Redis {
     return res;
   }
 
+  // sorted sets interface
   bool ZADD(std::string const &set, long long int score, std::string const &str) {
     auto query = "ZADD " + set + " " + std::to_string(score) + " " + str;
 
@@ -232,14 +371,31 @@ class Redis {
     }
 
     if (matchReturnStatus(reply.get(), REDIS_REPLY_ERROR)) {
-      _logger->info("redis returned error");
+      _logger->error("[Redis]: error in ZRANGE");
+    }
+
+    return res;
+  }
+
+  std::vector<std::string> ZREVRANGE(std::string const &set, long long int start, long long int end) {
+    auto query = "ZREVRANGE " + set + " " + std::to_string(start) + " " + std::to_string(end);
+
+    auto reply = getRedisReply(query.c_str());
+
+    std::vector<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        res.emplace_back(reply->element[i]->str);
+      }
+    } else {
+      _logger->error("[Redis]: error in ZREVRANGE");
     }
 
     return res;
   }
 
   std::string ZFIRST(std::string const &set) {
-    return ZRANGE(set, 0, 0).at(0);
+    return ZREVRANGE(set, -1, -1).at(0);
   }
 
   std::string ZLAST(std::string const &set) {
@@ -260,6 +416,22 @@ class Redis {
 
     if (matchReturnStatus(reply.get(), REDIS_REPLY_ERROR)) {
       _logger->info("redis returned error");
+    }
+
+    return res;
+  }
+
+  std::vector<std::string> ZRANGEBYLEX(std::string const &set, std::string const &start, std::string const &end) {
+    auto query = "ZRANGEBYLEX " + set + " [" + start + " [" + end;
+    auto reply = getRedisReply(query.c_str());
+
+    std::vector<std::string> res;
+    if (matchReturnStatus(reply.get(), REDIS_REPLY_ARRAY)) {
+      for (auto i = 0; i < reply->elements; i++) {
+        res.emplace_back(reply->element[i]->str);
+      }
+    } else {
+      _logger->error("[Redis]: error in ZRANGEBYLEX");
     }
 
     return res;
