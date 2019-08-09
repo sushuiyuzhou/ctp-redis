@@ -19,6 +19,7 @@ TEST(redis, init) {
 TEST(redis, init_fail) {
   EXPECT_ANY_THROW(redis::Redis("xxxx"));
 }
+
 class TestRedis : public ::testing::Test {
  protected:
   redis::Redis cli;
