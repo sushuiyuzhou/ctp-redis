@@ -4,6 +4,9 @@
 
 #include <gtest/gtest.h>
 
+#include "ctp/ThostFtdcUserApiDataType.h"
+#include "ctp/ThostFtdcUserApiStruct.h"
+
 #include "../redis/utils.h"
 
 namespace tests {
@@ -50,6 +53,58 @@ namespace tests {
 //inline int fromString<int, TypeID::T2>(std::string &&str) {
 //  return std::stoi(std::forward<std::string>(str));
 //}
+
+class TestSerDes : public ::testing::Test {
+ protected:
+  redis::Redis cli;
+
+ public:
+  TestSerDes() : cli("localhost") {}
+};
+
+TEST_F(TestSerDes, CThostFtdcDisseminationField) {
+  cli.DEL("TestDataCThostFtdcDisseminationField");
+
+  auto data = std::make_unique<CThostFtdcDisseminationField>();
+
+  data->SequenceSeries = 123;
+  data->SequenceNo = 1;
+
+  storage::toRedis(cli, "TestDataCThostFtdcDisseminationField", *data);
+
+  auto res = storage::fromRedis<CThostFtdcDisseminationField>()(cli, "TestDataCThostFtdcDisseminationField");
+
+  EXPECT_EQ(res->SequenceSeries, data->SequenceSeries);
+  EXPECT_EQ(res->SequenceNo, data->SequenceNo);
+
+  cli.DEL("TestDataCThostFtdcDisseminationField");
+}
+
+TEST_F(TestSerDes, CThostFtdcReqUserLoginField) {
+  cli.DEL("TestCThostFtdcReqUserLoginField");
+
+  auto data = std::make_unique<CThostFtdcReqUserLoginField>();
+
+  strcpy(data->TradingDay, "XXXXXXXX");
+  strcpy(data->BrokerID, "BrokerID");
+  strcpy(data->UserID, "UserID");
+  strcpy(data->Password, "Password");
+  strcpy(data->UserProductInfo, "UserProductInfo");
+  strcpy(data->InterfaceProductInfo, "InterfaceProductInfo");
+  strcpy(data->ProtocolInfo, "ProtocolInfo");
+  strcpy(data->MacAddress, "MacAddress");
+  strcpy(data->OneTimePassword, "OneTimePassword");
+  strcpy(data->ClientIPAddress, "ClientIPAddress");
+
+  storage::toRedis(cli, "TestCThostFtdcReqUserLoginField", *data);
+
+  auto res = storage::fromRedis<CThostFtdcReqUserLoginField>()(cli, "TestCThostFtdcReqUserLoginField");
+
+  EXPECT_EQ(std::string(res->TradingDay), std::string(data->TradingDay));
+  EXPECT_EQ(std::string(res->BrokerID), std::string(data->BrokerID));
+
+  cli.DEL("TestCThostFtdcReqUserLoginField");
+}
 
 };
 

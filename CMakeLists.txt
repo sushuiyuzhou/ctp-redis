@@ -11,7 +11,7 @@ set(SOURCE_FILES
         main.cpp
         redis/Redis.cpp
         redis/Redis.h
-        tests/redis.cpp redis/utils.h tests/serdes.cpp redis/utils.cpp)
+        tests/redis.cpp redis/utils.h tests/serdes.cpp redis/utils.cpp redis/score.h)
 
 add_executable(ctp-storage ${SOURCE_FILES})
 
