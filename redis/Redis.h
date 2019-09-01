@@ -11,12 +11,17 @@
 
 #include <hiredis/hiredis.h>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <set>
 #include <stdexcept>
 #include <string>
 #include <random>
+
+#include <signal.h>
+#include <hiredis/async.h>
+#include <hiredis/adapters/libevent.h>
 
 namespace redis {
 
@@ -27,12 +32,17 @@ class Redis {
   // hiredis objects
   using ContextDeleter = void (*)(redisContext *);
   using ReplyDeleter = void (*)(void *);
+  using AsyncContextDeleter = void (*)(redisAsyncContext *);
 
   using RedisContext = std::unique_ptr<redisContext, ContextDeleter>;
   using RedisReply = std::unique_ptr<redisReply, ReplyDeleter>;
 
+  using RedisAsyncContect = std::unique_ptr<redisAsyncContext, AsyncContextDeleter>;
+  using PubSubFunctor = std::function<void(redisAsyncContext *, void *, void *)>;
+
   std::string _id;
   RedisContext _cxt;
+  RedisAsyncContect _async;
 
   std::string _host;
   int _port;
@@ -49,9 +59,11 @@ class Redis {
         _host(host),
         _port(port),
         _timeout(timeout),
-        _cxt(nullptr, redisFree) {
+        _cxt(nullptr, redisFree),
+        _async(nullptr, redisAsyncDisconnect) {
     _logger->info("[Redis]: initialize redis client...");
     connect();
+    initAsyncConnection();
   }
 
   ~Redis() {
@@ -69,7 +81,48 @@ class Redis {
     return true;
   }
 
-  // return Reply handle from a redis request
+  bool initAsyncConnection() {
+    _logger->info("[Redis]: initialize async connection");
+    _async.reset(redisAsyncConnect(_host.c_str(), _port));
+    if (_async->err) {
+      _logger->info("[Redis]: error establishing async context {}", _async->errstr);
+    }
+  }
+
+  static void onSubMessage(redisAsyncContext *c, void *replyOrig, void *privdata) {
+    auto reply = static_cast<redisReply *>(replyOrig);
+
+    if (!reply) {
+      return;
+    }
+
+    if (reply->type == REDIS_REPLY_ARRAY) {
+      for (int j = 0; j < reply->elements; j++) {
+        printf("%u) %s\n", j, reply->element[j]->str);
+      }
+    }
+  }
+
+  void subscribeToTopic(std::string const &topic, void(*func)(redisAsyncContext*, void*, void*)) {
+    signal(SIGPIPE, SIG_IGN);
+
+    using EventType = std::unique_ptr<event_base, void(*)(event_base*)>;
+    EventType event(event_base_new(), event_base_free);
+
+    redisLibeventAttach(_async.get(), event.get());
+    redisAsyncCommand(_async.get(), func, NULL, (std::string("subscribe ")+topic).c_str());
+    event_base_dispatch(event.get());
+  }
+
+  void publishToTopic(std::string const & topic, std::string const& content) {
+    auto query = "publish " + topic + " " + content;
+    auto reply = getRedisReply(query.c_str());
+    if (reply->type == REDIS_REPLY_ERROR) {
+      _logger->error("[Redis]: error publish to topic {}", topic);
+    }
+  }
+
+// return Reply handle from a redis request
   template<typename... Args>
   RedisReply getRedisReply(Args... args) {
     RedisReply reply(
@@ -77,7 +130,7 @@ class Redis {
     return reply;
   }
 
-  // helper to check return status of the reply object
+// helper to check return status of the reply object
   void processReply(redisReply const *reply) {
     switch (reply->type) {
       case REDIS_REPLY_STATUS:_logger->info("[Redis]: redis returns the status {}", reply->str);
@@ -98,7 +151,7 @@ class Redis {
     }
   }
 
-  // helper util to test the redis reply
+// helper util to test the redis reply
   template<typename... Args>
   void testRedisReply(Args... args) {
     processReply(getRedisReply(args...).get());
@@ -127,7 +180,7 @@ class Redis {
     return reply->integer;
   }
 
-  // string interface
+// string interface
   bool SET(std::string const &key, std::string const &val) {
     auto query = "SET " + key + " " + val;
     auto reply = getRedisReply(query.c_str());
@@ -146,7 +199,7 @@ class Redis {
     }
   }
 
-  // TODO: expand to arbitrary arguments
+// TODO: expand to arbitrary arguments
   bool DEL(std::string const &key) {
     auto query = "DEL " + key;
     auto reply = getRedisReply(query.c_str());
@@ -190,8 +243,8 @@ class Redis {
     return res;
   }
 
-  // set interface
-  // TODO: extend to arbitrary arguments
+// set interface
+// TODO: extend to arbitrary arguments
   bool SADD(std::string const &set, std::string const &value) {
     auto query = std::string("SADD ") + set + " " + value;
     auto reply = getRedisReply(query.c_str());
@@ -252,7 +305,7 @@ class Redis {
     return res;
   }
 
-  // hash interface
+// hash interface
   bool HSET(std::string const &name, std::map<std::string, std::string> const &ctn) {
     std::string hash;
     for (auto &e : ctn) {
@@ -343,7 +396,7 @@ class Redis {
     return res;
   }
 
-  // sorted sets interface
+// sorted sets interface
   bool ZADD(std::string const &set, long long int score, std::string const &str) {
     auto query = "ZADD " + set + " " + std::to_string(score) + " " + str;
 

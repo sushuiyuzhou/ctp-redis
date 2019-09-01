@@ -28,5 +28,8 @@ target_link_libraries(ctp-storage ${Boost_LIBRARIES})
 #include_directories(include/hiredis)
 target_link_libraries(ctp-storage hiredis)
 
+find_library(LIBEVENT2_CORE event_core)
+target_link_libraries(ctp-storage ${LIBEVENT2_CORE})
+
 #Link with CTP
 include_directories(v1)

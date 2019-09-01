@@ -116,5 +116,13 @@ TEST_F(TestRedis, zset) {
   cli.DEL("myset");
 }
 
+TEST_F(TestRedis, subscribe) {
+  cli.subscribeToTopic("testtopic", redis::Redis::onSubMessage);
+}
+
+TEST_F(TestRedis, publish) {
+  cli.publishToTopic("testtopic", "content");
+}
+
 }
 
